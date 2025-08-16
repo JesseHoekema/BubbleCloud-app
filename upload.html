@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Upload Files</title>
+  <style>
+    body { font-family: sans-serif; padding: 20px; }
+    button { padding: 10px 20px; font-size: 16px; }
+    ul { margin-top: 20px; }
+  </style>
+</head>
+<body>
+  <h3>Upload Files</h3>
+  <button id="uploadBtn">Select File(s)</button>
+  <ul id="fileList"></ul>
+
+  <script>
+    const { dialog } = require('electron').remote || require('@electron/remote');
+    const fs = require('fs');
+    const path = require('path');
+
+    const uploadBtn = document.getElementById('uploadBtn');
+    const fileList = document.getElementById('fileList');
+    const ASSETS_DIR = path.join(__dirname, 'assets');
+
+    uploadBtn.addEventListener('click', async () => {
+      const { canceled, filePaths } = await dialog.showOpenDialog({
+        properties: ['openFile', 'multiSelections']
+      });
+
+      if (canceled || filePaths.length === 0) return;
+
+      filePaths.forEach(filePath => {
+        const fileName = path.basename(filePath);
+        const destPath = path.join(ASSETS_DIR, fileName);
+
+        fs.copyFileSync(filePath, destPath);
+
+        const li = document.createElement('li');
+        li.textContent = fileName;
+        fileList.appendChild(li);
+      });
+
+      alert('File(s) uploaded successfully!');
+    });
+  </script>
+</body>
+</html>

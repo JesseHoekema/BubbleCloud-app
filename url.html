@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Enter URL</title>
+  <style>
+    body { font-family: sans-serif; padding: 20px; }
+    input {
+        width: 100%;
+        padding: 8px;
+        margin-top: 15px;
+        border-radius: 6px;
+        border: 1px solid #ccc;
+        font-size: 14px;
+        box-sizing: border-box;
+    }
+    button {
+        margin-top: 15px;
+        padding: 8px 16px;
+        background-color: #4285f4;
+        border: none;
+        color: white;
+        border-radius: 6px;
+        font-size: 14px;
+        cursor: pointer;
+    }
+    button:hover {
+        background-color: #3367d6;
+    }
+  </style>
+</head>
+<body>
+  <h3>Enter the URL of your BubbleCloud Instance:</h3>
+  <input type="text" id="urlInput" placeholder="http://localhost:5923">
+  <button id="saveBtn">Save</button>
+
+  <script>
+    const fs = require('fs');
+    const path = require('path');
+    const os = require('os');
+
+    // Create config path manually since we can't use remote
+    function getConfigPath() {
+      const userDataPath = path.join(os.homedir(), process.platform === 'darwin' ? 
+        'Library/Application Support/BubbleCloud' : 
+        process.platform === 'win32' ? 
+          'AppData/Roaming/BubbleCloud' : 
+          '.config/BubbleCloud'
+      );
+      
+      // Ensure directory exists
+      if (!fs.existsSync(userDataPath)) {
+        fs.mkdirSync(userDataPath, { recursive: true });
+      }
+      
+      return path.join(userDataPath, 'config.json');
+    }
+
+    const CONFIG_FILE = getConfigPath();
+    const saveBtn = document.getElementById('saveBtn');
+    const urlInput = document.getElementById('urlInput');
+
+    // Load existing URL if it exists
+    try {
+      if (fs.existsSync(CONFIG_FILE)) {
+        const config = JSON.parse(fs.readFileSync(CONFIG_FILE));
+        if (config.url) {
+          urlInput.value = config.url;
+        }
+      }
+    } catch (error) {
+      console.log('Could not load existing config:', error);
+    }
+
+    // Focus the input
+    urlInput.focus();
+
+    // Handle Enter key
+    urlInput.addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') {
+        saveBtn.click();
+      }
+    });
+
+    saveBtn.addEventListener('click', () => {
+      const url = urlInput.value.trim();
+      if (!url) {
+        alert('Please enter a valid URL');
+        return;
+      }
+
+      // Remove trailing slash for consistency
+      const cleanUrl = url.replace(/\/$/, '');
+
+      try {
+        // Load existing config or create new one
+        let config = {};
+        if (fs.existsSync(CONFIG_FILE)) {
+          config = JSON.parse(fs.readFileSync(CONFIG_FILE));
+        }
+        
+        config.url = cleanUrl;
+        fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2));
+        window.close();
+      } catch (error) {
+        alert('Error saving URL: ' + error.message);
+      }
+    });
+  </script>
+</body>
+</html>
