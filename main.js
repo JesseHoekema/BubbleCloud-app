@@ -64,7 +64,7 @@ function showUrlPopup() {
   });
 }
 
-function showLoginPopup() {
+async function showLoginPopup() {
   return new Promise((resolve) => {
     const loginWindow = new BrowserWindow({
       width: 500,
@@ -73,25 +73,40 @@ function showLoginPopup() {
       webPreferences: { nodeIntegration: false, contextIsolation: true }
     });
 
-    const loginUrl = `${config.url}/login`;
-    loginWindow.loadURL(loginUrl);
+    loginWindow.loadURL(`${config.url}/app-api/login-page`);
 
     loginWindow.webContents.on('did-navigate', async (event, url) => {
-      if (url.endsWith('/dashboard')) {
-        const cookies = await loginWindow.webContents.session.cookies.get({});
-        const sessionCookie = cookies.find(c => c.name.includes('session') || c.name.includes('auth'));
-        if (sessionCookie) {
-          config.authToken = sessionCookie.value;
-          saveConfig();
-          loginWindow.close();
-          resolve(true);
+      try {
+        const parsedUrl = new URL(url);
+        if (parsedUrl.pathname === '/app-api/session-token') {
+          const sessionData = await loginWindow.webContents.executeJavaScript(`
+            (() => {
+              try {
+                return JSON.parse(document.body.innerText);
+              } catch(e) { return null; }
+            })()
+          `);
+
+          if (sessionData && sessionData.session) {
+            config.authToken = sessionData.session;
+            saveConfig();
+            loginWindow.hide(); 
+            resolve(true);
+          } else {
+            console.error('Session JSON missing or invalid:', sessionData);
+            resolve(false);
+          }
         }
+      } catch (err) {
+        console.error('Error handling session redirect:', err);
+        resolve(false);
       }
     });
 
     loginWindow.on('closed', () => resolve(false));
   });
 }
+
 
 async function uploadFiles() {
   if (!config.authToken) {
@@ -114,34 +129,56 @@ async function uploadFiles() {
   });
 
   tempWindow.close();
-
   if (canceled || filePaths.length === 0) return;
 
   try {
+    const form = new FormData();
     for (const filePath of filePaths) {
-      const form = new FormData();
-      form.append('file', fs.createReadStream(filePath));
+      form.append("file", fs.createReadStream(filePath));
+    }
 
-      const res = await fetch(`${config.url}/dashboard`, {
-        method: 'POST',
-        body: form,
-        headers: { Cookie: `session=${config.authToken}` }
-      });
+    const res = await fetch(`${config.url}/app-api/upload-files`, {
+      method: "POST",
+      body: form,
+      headers: {
+        ...form.getHeaders(),
+        Cookie: `session=${config.authToken}` 
+      },
+      redirect: "manual"
+    });
 
-      if (res.redirected && res.url.endsWith('/login')) {
+    console.log("Upload status:", res.status, "Location:", res.headers.get("location"));
+
+    if (res.status >= 300 && res.status < 400) {
+      const location = res.headers.get("location");
+      if (location && location.endsWith("/login")) {
         config.authToken = null;
         saveConfig();
         await showLoginPopup();
-        return uploadFiles();
+        return uploadFiles(); 
       }
     }
 
-    dialog.showMessageBox({ type: 'info', message: 'File(s) uploaded successfully!' });
-    updateTrayMenu();
+    if (res.ok) {
+      const data = await res.json();
+      if (data.status === "success") {
+        dialog.showMessageBox({
+          type: "info",
+          message: data.message + "\n" + data.files.join("\n")
+        });
+        updateTrayMenu();
+      } else {
+        dialog.showErrorBox("Upload Error", data.message || "Unknown error");
+      }
+    } else {
+      dialog.showErrorBox("Upload Error", `Status: ${res.status} ${res.statusText}`);
+    }
   } catch (err) {
-    dialog.showErrorBox('Upload Error', err.message);
+    dialog.showErrorBox("Upload Error", err.message);
   }
 }
+
+
 
 async function downloadFile(url, savePath, window) {
     return new Promise((resolve, reject) => {
@@ -185,55 +222,55 @@ async function downloadFile(url, savePath, window) {
 }
 
 async function downloadFiles() {
-    if (!config.authToken) {
-        const loggedIn = await showLoginPopup();
-        if (!loggedIn) return;
+  if (!config.authToken) {
+    console.log("No auth token, show login popup here.");
+    return;
+  }
+
+  const downloadWindow = new BrowserWindow({
+    width: 800,
+    height: 600,
+    alwaysOnTop: true,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true
     }
-    
-    const downloadWindow = new BrowserWindow({
-        width: 800,
-        height: 600,
-        alwaysOnTop: true,
-        webPreferences: { nodeIntegration: false, contextIsolation: true }
-    });
+  });
 
-    await downloadWindow.webContents.session.cookies.set({
-        url: config.url,
-        name: 'session',
-        value: config.authToken,
-        domain: new URL(config.url).hostname,
-        path: '/',
-        secure: false, 
-        httpOnly: false
-    });
-    
-    downloadWindow.webContents.on('will-navigate', async (event, navigationUrl) => {
-        if (!navigationUrl.startsWith(`${config.url}/app-api/get-files`)) {
-            event.preventDefault();
-            
-            const urlPath = new URL(navigationUrl).pathname;
-            const originalFilename = path.basename(urlPath);
-            
-            const result = await dialog.showSaveDialog(downloadWindow, {
-                title: 'Save File As...',
-                defaultPath: originalFilename,
-                buttonLabel: 'Download',
-                properties: ['createDirectory']
-            });
-            
-            if (!result.canceled) {
-                try {
-                    await downloadFile(navigationUrl, result.filePath, downloadWindow);
-                    downloadWindow.close();
-                } catch (error) {
-                    console.error('Download failed, keeping window open:', error);
-                }
-            }
+  const filter = { urls: [`${config.url}/*`] };
+  downloadWindow.webContents.session.webRequest.onBeforeSendHeaders(filter, (details, callback) => {
+    details.requestHeaders['Authorization'] = `Bearer ${config.authToken}`;
+    callback({ requestHeaders: details.requestHeaders });
+  });
+
+  downloadWindow.webContents.on('will-navigate', async (event, navigationUrl) => {
+    if (!navigationUrl.startsWith(`${config.url}/app-api/get-files`)) {
+      event.preventDefault();
+
+      const urlPath = new URL(navigationUrl).pathname;
+      const originalFilename = path.basename(urlPath);
+
+      const result = await dialog.showSaveDialog(downloadWindow, {
+        title: 'Save File As...',
+        defaultPath: originalFilename,
+        buttonLabel: 'Download',
+        properties: ['createDirectory']
+      });
+
+      if (!result.canceled) {
+        try {
+          await downloadFile(navigationUrl, result.filePath, downloadWindow);
+          downloadWindow.close();
+        } catch (error) {
+          console.error('Download failed, keeping window open:', error);
         }
-    });
+      }
+    }
+  });
 
-    downloadWindow.loadURL(`${config.url}/app-api/get-files`);
+  downloadWindow.loadURL(`${config.url}/app-api/get-files`);
 }
+
 
 function updateTrayMenu() {
   const contextMenu = Menu.buildFromTemplate([
